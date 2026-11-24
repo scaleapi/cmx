@@ -39,3 +39,6 @@ tmp
 # Build output
 cmxc
 *.o
+cmx
+bf16ref
+bf16ref_emu
