@@ -1,9 +1,9 @@
 #!/bin/sh
-# Round-trip and malformed-input tests for cmxc.  Usage: tests/roundtrip.sh [path/to/cmxc]
+# Round-trip and malformed-input tests for the text codec (cmxc) in cmx.  Usage: tests/roundtrip.sh [path/to/cmx]
 # Each cmxc run maps about 3.4 GiB of model tables, so the multi-block cases need several GiB.
 set -u
-CMXC=${1:-./cmxc}
-[ -x "$CMXC" ] || { echo "cmxc binary not found: $CMXC" >&2; exit 2; }
+CMXC=${1:-./cmx}
+[ -x "$CMXC" ] || { echo "cmx binary not found: $CMXC" >&2; exit 2; }
 T=$(mktemp -d "${TMPDIR:-/tmp}/cmxc-test.XXXXXX") || exit 2
 trap 'rm -rf "$T"' EXIT INT TERM
 SRC=$(dirname "$0")/../cmxc.c

@@ -2454,6 +2454,9 @@ fail:
 }
 
 /* ----------------------------------------------------------- main -------- */
+#ifdef CMX_UNIFIED                 /* built into the cmx program (cmx.c), which dispatches to it */
+#define main cmxc_main
+#endif
 int main(int argc,char**argv){
     if(argc<4 || (argv[1][0]!='c' && argv[1][0]!='d') || argv[1][1]!=0){
         fprintf(stderr,
