@@ -1,15 +1,15 @@
 #!/bin/sh
-# Tests of the cmx program against the standalone codecs.  Usage: tests/cmx.sh [dir with cmx, cmxc, bf16ref]
-#  - cmx writes byte-identical archives to cmxc and to bf16ref, and each binary decodes the others' archives;
-#  - cmx picks bf16ref for safetensors files with BF16 tensors (and for --ref) and cmxc otherwise;
-#  - round trips standalone and given a base, on a synthetic safetensors pair (needs python3);
+# Tests of the cmx program.  Usage: tests/cmx.sh [path/to/cmx]
+#  - text and weights round trips, alone and given a base, on a synthetic safetensors pair (needs python3);
+#  - options give the same archive as the settings they stand for (--max = CMX_NIBO=0, -t N = CMXC_THREADS=N),
+#    and the weights codec's archives do not depend on the thread count;
+#  - cmx picks the weights codec (bf16ref) for safetensors files with BF16 tensors (and for --ref), cmxc otherwise;
 #  - the BFR8 sub-stream layouts (-s, -l) round-trip and -s 0 -l 16 writes BFR7;
 #  - options that do not apply, wrong references and non-archives are refused.
-# Each cmxc run maps about 3.4 GiB of model tables.
+# Each text-codec run maps about 3.4 GiB of model tables.
 set -u
-B=${1:-.}
-for x in cmx cmxc bf16ref; do [ -x "$B/$x" ] || { echo "binary not found: $B/$x" >&2; exit 2; }; done
-CMX=$B/cmx; CMXC=$B/cmxc; BFR=$B/bf16ref
+CMX=${1:-./cmx}
+[ -x "$CMX" ] || { echo "cmx binary not found: $CMX" >&2; exit 2; }
 T=$(mktemp -d "${TMPDIR:-/tmp}/cmx-test.XXXXXX") || exit 2
 trap 'rm -rf "$T"' EXIT INT TERM
 pass=0; fail=0
@@ -48,49 +48,42 @@ ft = {k: (dt, sh, [w + rnd.gauss(0, 0.001) * (abs(w) + 1e-3) if dt == "BF16" and
 write(f"{T}/base.safetensors", base); write(f"{T}/ft.safetensors", ft)
 EOF
 
-# ---- text: cmx = cmxc, both ways
-check "$CMXC" c "$T/text" "$T/t.cmxc" && check "$CMX" c "$T/text" "$T/t.cmx"
-same "text: cmx archive = cmxc archive" "$T/t.cmxc" "$T/t.cmx"
-tag "text: compressed with cmxc" "$T/t.cmx" CMXC
-check "$CMXC" d "$T/t.cmx" "$T/t1" && same "text: cmxc decodes cmx" "$T/text" "$T/t1"
-check "$CMX" d "$T/t.cmxc" "$T/t2" && same "text: cmx decodes cmxc" "$T/text" "$T/t2"
-CMX_NIBO=0 check "$CMXC" c "$T/text" "$T/tm.cmxc" && check "$CMX" c "$T/text" "$T/tm.cmx" --max
-same "text --max: cmx archive = cmxc with CMX_NIBO=0" "$T/tm.cmxc" "$T/tm.cmx"
+# ---- text
+check "$CMX" c "$T/text" "$T/t.cmx" && tag "text: compressed with cmxc" "$T/t.cmx" CMXC
+check "$CMX" d "$T/t.cmx" "$T/t1" && same "text: round trip" "$T/text" "$T/t1"
+CMX_NIBO=0 check "$CMX" c "$T/text" "$T/tm.env" && check "$CMX" c "$T/text" "$T/tm.cmx" --max
+same "text --max: archive = with CMX_NIBO=0" "$T/tm.env" "$T/tm.cmx"
 check "$CMX" d "$T/tm.cmx" "$T/t3" && same "text --max: round trip" "$T/text" "$T/t3"
-CMXC_THREADS=3 CMXC_MINBLK=16384 check "$CMXC" c "$T/text" "$T/tb.cmxc" && CMXC_MINBLK=16384 check "$CMX" c "$T/text" "$T/tb.cmx" -t 3
-same "text -t 3: cmx archive = cmxc with CMXC_THREADS=3" "$T/tb.cmxc" "$T/tb.cmx"
+CMXC_THREADS=3 CMXC_MINBLK=16384 check "$CMX" c "$T/text" "$T/tb.env" && CMXC_MINBLK=16384 check "$CMX" c "$T/text" "$T/tb.cmx" -t 3
+same "text -t 3: archive = with CMXC_THREADS=3" "$T/tb.env" "$T/tb.cmx"
 check "$CMX" d "$T/tb.cmx" "$T/t4" -t 2 && same "text -t 3: round trip" "$T/text" "$T/t4"
-check "$CMX" c "$T/random" "$T/r.cmx" && check "$CMXC" d "$T/r.cmx" "$T/r1" && same "random: cmx -> cmxc round trip" "$T/random" "$T/r1"
+check "$CMX" c "$T/random" "$T/r.cmx" && check "$CMX" d "$T/r.cmx" "$T/r1" && same "random: round trip" "$T/random" "$T/r1"
 
-# ---- weights alone: cmx = bf16ref, both ways (bf16ref archives do not depend on the thread count)
-check "$BFR" c "$T/ft.safetensors" "$T/w.bfr" && check "$CMX" c "$T/ft.safetensors" "$T/w.cmx" -t 4
-same "weights: cmx archive = bf16ref archive" "$T/w.bfr" "$T/w.cmx"
+# ---- weights alone (the weights codec's archives do not depend on the thread count)
+check "$CMX" c "$T/ft.safetensors" "$T/w1.cmx" -t 1 && check "$CMX" c "$T/ft.safetensors" "$T/w.cmx" -t 4
+same "weights: -t 4 archive = -t 1 archive" "$T/w1.cmx" "$T/w.cmx"
 tag "weights: compressed with bf16ref (BFR8 by default)" "$T/w.cmx" BFR8
-check "$BFR" d "$T/w.cmx" "$T/w1" && same "weights: bf16ref decodes cmx" "$T/ft.safetensors" "$T/w1"
-check "$CMX" d "$T/w.bfr" "$T/w2" -t 3 && same "weights: cmx decodes bf16ref" "$T/ft.safetensors" "$T/w2"
-check "$BFR" c "$T/ft.safetensors" "$T/wb.bfr" -b 1 && check "$CMX" c "$T/ft.safetensors" "$T/wb.cmx" -b 1
-same "weights -b 1: cmx archive = bf16ref archive" "$T/wb.bfr" "$T/wb.cmx"
+check "$CMX" d "$T/w.cmx" "$T/w1" -t 1 && same "weights: round trip, 1 thread" "$T/ft.safetensors" "$T/w1"
+check "$CMX" d "$T/w.cmx" "$T/w2" -t 3 && same "weights: round trip, 3 threads" "$T/ft.safetensors" "$T/w2"
+check "$CMX" c "$T/ft.safetensors" "$T/wb.cmx" -b 1 && check "$CMX" d "$T/wb.cmx" "$T/w3" && same "weights -b 1: round trip" "$T/ft.safetensors" "$T/w3"
 
 # ---- weights given the base
-check "$BFR" c "$T/ft.safetensors" "$T/d.bfr" --ref "$T/base.safetensors" && check "$CMX" c "$T/ft.safetensors" "$T/d.cmx" --ref "$T/base.safetensors" -t 4
-same "given the base: cmx archive = bf16ref archive" "$T/d.bfr" "$T/d.cmx"
-check "$BFR" d "$T/d.cmx" "$T/d1" --ref "$T/base.safetensors" && same "given the base: bf16ref decodes cmx" "$T/ft.safetensors" "$T/d1"
-check "$CMX" d "$T/d.bfr" "$T/d2" --ref "$T/base.safetensors" && same "given the base: cmx decodes bf16ref" "$T/ft.safetensors" "$T/d2"
+check "$CMX" c "$T/ft.safetensors" "$T/d1.cmx" --ref "$T/base.safetensors" -t 1 && check "$CMX" c "$T/ft.safetensors" "$T/d.cmx" --ref "$T/base.safetensors" -t 4
+same "given the base: -t 4 archive = -t 1 archive" "$T/d1.cmx" "$T/d.cmx"
+check "$CMX" d "$T/d.cmx" "$T/d1" --ref "$T/base.safetensors" && same "given the base: round trip" "$T/ft.safetensors" "$T/d1"
 a=$(wc -c < "$T/w.cmx"); d=$(wc -c < "$T/d.cmx")
 [ "$d" -lt "$a" ] && ok "given the base is smaller than alone ($d < $a bytes)" || bad "given the base is not smaller ($d vs $a)"
 
 # ---- BFR8: sub-stream layouts, alone and given the base, small blocks so that blocks have several sub-streams
 for lay in "-b 1 -s 1 -l 32" "-b 1 -s 1 -l 16" "-b 1 -s 0 -l 32" "-b 2 -s 3 -l 32"; do
     check "$CMX" c "$T/ft.safetensors" "$T/g.cmx" $lay && tag "BFR8 $lay: tag" "$T/g.cmx" BFR8
-    check "$BFR" c "$T/ft.safetensors" "$T/g.bfr" $lay && same "BFR8 $lay: cmx archive = bf16ref archive" "$T/g.bfr" "$T/g.cmx"
-    check "$BFR" d "$T/g.cmx" "$T/g1" && same "BFR8 $lay: round trip" "$T/ft.safetensors" "$T/g1"
+    check "$CMX" d "$T/g.cmx" "$T/g1" && same "BFR8 $lay: round trip" "$T/ft.safetensors" "$T/g1"
     check "$CMX" c "$T/ft.safetensors" "$T/gr.cmx" --ref "$T/base.safetensors" $lay
     check "$CMX" d "$T/gr.cmx" "$T/g2" --ref "$T/base.safetensors" -t 3 && same "BFR8 $lay given the base: round trip" "$T/ft.safetensors" "$T/g2"
 done
 check "$CMX" c "$T/ft.safetensors" "$T/g7.cmx" -s 0 -l 16 && tag "-s 0 -l 16 writes BFR7" "$T/g7.cmx" BFR7
-check "$BFR" c "$T/ft.safetensors" "$T/g7.bfr" -s 0 -l 16 && same "-s 0 -l 16: cmx archive = bf16ref archive" "$T/g7.bfr" "$T/g7.cmx"
-check "$BFR" d "$T/g7.cmx" "$T/g7o" && same "-s 0 -l 16: round trip" "$T/ft.safetensors" "$T/g7o"
-# a BFR8 archive with a damaged index or a damaged layout field is refused
+check "$CMX" d "$T/g7.cmx" "$T/g7o" && same "-s 0 -l 16: round trip" "$T/ft.safetensors" "$T/g7o"
+# a BFR8 archive with a damaged layout field is refused
 check "$CMX" c "$T/ft.safetensors" "$T/gi.cmx" -b 1 -s 1 -l 32
 cp "$T/gi.cmx" "$T/gl.cmx"; printf '\030' | dd of="$T/gl.cmx" bs=1 seek=44 conv=notrunc 2>/dev/null
 refuse "BFR8 with 24 lanes" "$CMX" d "$T/gl.cmx" "$T/x"

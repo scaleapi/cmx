@@ -5,7 +5,7 @@
 // kernels do (their warp-level loops are warp-uniform).  Shared memory is static (one block at a time);
 // dynamic shared memory is a per-launch buffer.  Atomics use std::atomic_ref.
 //
-// (From the bf16ref repository's prototype/gpu/cuemu.cpp.)  bf16ref_gpu.cu includes this header instead of the CUDA
+// bf16ref_gpu.cu includes this header instead of the CUDA
 // runtime when built with -DBFR_GPU_EMU (C++20), so that its host code and the kernels run on a machine
 // without a GPU: emu_run(kernel, grid, block, smem, args...) runs the kernel's blocks one after another.
 #include <atomic>

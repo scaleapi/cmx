@@ -1,6 +1,6 @@
 # cmx
 
-Two lossless compressors in one program:
+One program, `cmx`, with two lossless codecs inside:
 
 - **cmxc** (`cmxc.c`): context mixing, for text and general data. It accompanies the paper
   *Per-File Models for Lossless Compression* (2026). Archives start with `CMXC`.
@@ -8,41 +8,41 @@ Two lossless compressors in one program:
   It codes a model alone, or a fine-tuned model given its base model. Archives start with `BFR8` (the
   sub-stream layout below, the default) or `BFR7`; `BFR6` archives still decode.
 
-`cmx` (`cmx.c`) chooses one of them. Both codecs are compiled unchanged, with their `main` functions
-renamed (`-DCMX_UNIFIED`). So a `cmx` archive is byte for byte the archive of the codec that wrote it,
-and the standalone `cmxc` and `bf16ref` binaries decode it, and the other way round.
+`cmx` (`cmx.c`) chooses the codec from the input when compressing and from the archive when decompressing.
+Both codecs are compiled into it unchanged, with their `main` functions renamed (`-DCMX_UNIFIED`).
 
 ## Build
 
 ```
-make            # cmx, cmxc and bf16ref
-make test       # tests/roundtrip.sh on cmxc and on cmx, then tests/cmx.sh
+make            # builds ./cmx
+make test       # tests/roundtrip.sh and tests/cmx.sh
 ```
 
 This uses `clang -O3 -march=native ... -lm -lpthread`; use `make CC=gcc` for another compiler. The
 code has no dependencies. `tests/cmx.sh` needs `python3` to write its safetensors inputs.
 
-- **cmxc** has been built and tested only on Apple silicon (arm64, NEON); other platforms fall back
+- **The text codec (cmxc)** has been built and tested only on Apple silicon (arm64, NEON); other platforms fall back
   to a portable scalar mixing path that has not been tested. An archive records whether NEON mixing
   was used, and a decoder built the other way refuses it rather than decoding it incorrectly.
-- **bf16ref** has also been built and tested with gcc on x86-64 (AMD EPYC, Ubuntu 24.04).
+- **The weights codec (bf16ref)** has also been built and tested with gcc on x86-64 (AMD EPYC, Ubuntu 24.04).
 
-`tests/roundtrip.sh` round-trips empty, text, random and E8/E9-heavy inputs, including multi-block and
+`tests/roundtrip.sh` tests the text codec: it round-trips empty, text, random and E8/E9-heavy inputs, including multi-block and
 primed archives, and checks that the decoder refuses truncated and malformed archives.
 
 `tests/cmx.sh` checks several things:
-- `cmx` writes the same bytes as `cmxc` and `bf16ref`, and each binary decodes the others' archives;
+- round trips of text and of a synthetic safetensors pair, alone and given the base;
+- options give the same archive as the settings they stand for, and weights archives do not depend on `-t`;
 - the choice of codec;
-- round trips of a synthetic safetensors pair, alone and given the base;
+- the BFR8 layouts;
 - refusals.
 
-Each `cmxc` run maps about 3.4 GiB of model tables.
+Each text-codec run maps about 3.4 GiB of model tables.
 
 ## Use
 
 ```
-./cmx c <input> <archive> [--ref BASE] [-t N] [--max] [--codec text|weights] [-b MiB]
-./cmx d <archive> <output> [--ref BASE] [-t N]
+./cmx c <input> <archive> [--ref BASE] [-t N] [--max] [--codec text|weights] [-b MiB] [-s KiB] [-l lanes] [--gpu]
+./cmx d <archive> <output> [--ref BASE] [-t N] [--gpu]
 ```
 
 **Compressing.** `cmx c` uses bf16ref for a safetensors file with at least one BF16 tensor, and cmxc
@@ -60,10 +60,6 @@ the tensors of other dtypes raw.
 | `-b MiB` | bf16ref block size (default 64). |
 | `-s KiB`, `-l lanes` | bf16ref's layout (below): sub-streams of `-s` KiB with `-l` lanes. The default is `-s 256 -l 32` (BFR8); `-s 0 -l 16` writes BFR7. |
 | `--gpu` | bf16ref on the GPU: BFR8 with 32 lanes (a build with `make CUDA=1`). |
-
-The standalone binaries remain:
-- `./cmxc c|d <in> <out>`, with its settings in environment variables (below);
-- `./bf16ref c|d <in> <out> [--ref REF] [-t N] [-b MiB]`.
 
 ## BFR8: the sub-stream layout
 
@@ -91,7 +87,9 @@ exact ties differently on different math libraries.
 
 ## GPU
 
-`make CUDA=1` builds `cmx` and `bf16ref` with a GPU path, compiled with `nvcc` (default `CUDA_ARCH=sm_90`, H100).
+`make CUDA=1` builds `cmx` with a GPU path for the weights codec, compiled with `nvcc` (default `CUDA_ARCH=sm_90`,
+H100). The CPU stays the default: for file-to-file use, 16 CPU threads are faster end to end than one H100,
+because of CUDA start-up and host copies.
 
 **Writing.** `--gpu` codes every bfloat16 segment on the GPU. Checks and file I/O stay on the CPU. It writes
 BFR8 with 32 lanes, the same bytes the CPU encoder writes for that layout.
@@ -101,9 +99,9 @@ other archive is decoded without `--gpu`.
 
 **Sources.**
 - `bf16ref_gpu.cu`: the host side.
-- `gpu/kernels.cuh`: the kernels, from the G8 prototype of the bf16ref repository.
-- `gpu/cuemu.h`: a CPU emulator of the kernels. `make bf16ref_emu` builds the GPU path on it, so it can be
-  tested without a GPU. It is slow, so use small inputs only.
+- `gpu/kernels.cuh`: the kernels.
+- `gpu/cuemu.h`: a CPU emulator of the kernels. `make cmx_emu` builds a test-only `cmx` with the GPU path on
+  it, so the GPU path can be tested without a GPU. It is slow, so use small inputs only.
 
 **Tests.** `make test-gpu-emu` (emulator) and `make CUDA=1 test-gpu` (GPU) run `tests/gpu.sh`. It checks four
 things:
@@ -112,7 +110,9 @@ things:
 - archives the GPU path cannot decode are refused;
 - damaged archives fail with an error.
 
-## cmxc settings (environment variables, read when compressing)
+## Text-codec settings (environment variables, read when compressing)
+
+`-t` and `--max` set the first two.
 
 | Variable | Effect |
 |---|---|

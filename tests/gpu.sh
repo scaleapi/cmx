@@ -1,7 +1,7 @@
 #!/bin/sh
-# The GPU path of bf16ref (--gpu) against its CPU coder.  Usage: tests/gpu.sh CPU_BIN GPU_BIN [small]
-#   CPU_BIN  a bf16ref binary (its CPU path is used)
-#   GPU_BIN  a bf16ref built with make CUDA=1, or bf16ref_emu (the kernels on the CPU emulator; give "small")
+# The GPU path of the weights codec (cmx --gpu) against its CPU coder.  Usage: tests/gpu.sh CPU_BIN GPU_BIN [small]
+#   CPU_BIN  a cmx binary (its CPU path is used)
+#   GPU_BIN  a cmx built with make CUDA=1, or cmx_emu (the kernels on the CPU emulator; give "small")
 # For several BFR8 layouts with 32 lanes, alone and given the base: the GPU writes the same archive as the CPU,
 # the GPU decodes the CPU's archive and the CPU the GPU's; --gpu picks 256 KiB x 32 lanes by default; archives the
 # GPU path cannot decode are refused, and damaged archives fail with an error, never with wrong output.

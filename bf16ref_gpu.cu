@@ -1,8 +1,7 @@
-/* GPU coding of bf16ref's BFR8 blocks with 32 lanes (bf16ref.c --gpu).
+/* GPU coding of bf16ref's BFR8 blocks with 32 lanes (cmx --gpu).
  *
- * The kernels (gpu/kernels.cuh) come from the G8 prototype in the bf16ref repository; this file is its host
- * driver (prototype/gpu/g8gpu.py) in C++: the layout of sub-streams, work items and chunks, and the encode and
- * decode pipelines.  It writes and reads the same blocks as bf16ref.c's CPU encoder and decoder, byte for byte.
+ * This file is the host driver of the kernels in gpu/kernels.cuh: the layout of sub-streams, work items and
+ * chunks, and the encode and decode pipelines.  It writes and reads the same blocks as bf16ref.c's CPU encoder and decoder, byte for byte.
  *
  * Built with nvcc (make CUDA=1), or with -DBFR_GPU_EMU as plain C++20 on the CPU emulator (gpu/cuemu.h), which
  * runs the same kernels one CUDA thread per OS thread, to test this code without a GPU (small inputs only).
@@ -113,7 +112,7 @@ template <class T> struct DA {
 const int L = 32;                       /* lanes: one sub-stream per warp */
 const u64 CH = 1 << 17, CHR = 65504, RAWCH = 1 << 18;
 const u32 TABSTRIDE_REF = 2 + 256 * (2 + 3 * NSD);
-const int EWARPS = 8, DWARPS = 16;      /* warps per thread block, encoding and decoding (as in the prototype's runs) */
+const int EWARPS = 8, DWARPS = 16;      /* warps per thread block, encoding and decoding (the tuned values) */
 const u32 SMT = 48 * 1024;              /* shared memory for a block's table image given the reference (v3) */
 
 /* BFR_GPU_TIMING=1: time of each stage on stderr (after a device synchronization) */

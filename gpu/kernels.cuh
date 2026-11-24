@@ -1,5 +1,5 @@
-// CUDA kernels for bf16ref's BFR8 blocks (from the G8 prototype of the bf16ref repository, prototype/gpu/kernels.cu;
-// there they are compiled with NVRTC, here with nvcc in bf16ref_gpu.cu, or for the CPU emulator gpu/cuemu.h).
+// CUDA kernels for bf16ref's BFR8 blocks, compiled with nvcc in bf16ref_gpu.cu, or for the CPU emulator
+// gpu/cuemu.h.
 //
 // Decoding: a parse kernel reads each block's header, tables and sub-stream index, builds the block's
 // decoding tables in global memory and writes one descriptor per sub-stream.  The decode kernels give each
