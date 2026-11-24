@@ -40,3 +40,4 @@ tmp
 *.o
 cmx
 cmx_emu
+.buildmode

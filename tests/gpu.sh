@@ -60,10 +60,10 @@ if [ -z "$SMALL" ]; then
 fi
 
 # refusals and damaged archives
-run "$CPU" c "$T/ft.st" "$T/b7.a" -s 0 -l 16
+run "$CPU" c "$T/ft.st" "$T/b7.a" -s 0 -l 16 || bad "write a BFR7 archive"
 refuse "--gpu decoding of a BFR7 archive" "$GPU" d "$T/b7.a" "$T/x" --gpu
 refuse "--gpu with -l 16" "$GPU" c "$T/ft.st" "$T/x" -s 1 -l 16 --gpu
-run "$CPU" c "$T/ft.st" "$T/m.a" --ref "$T/base.st" -b 1 -s 1 -l 32
+run "$CPU" c "$T/ft.st" "$T/m.a" --ref "$T/base.st" -b 1 -s 1 -l 32 || bad "write the archive to damage"
 sz=$(wc -c < "$T/m.a"); i=0; wrong=0; err=0; same=0
 while [ $i -lt 12 ]; do
     cp "$T/m.a" "$T/mm.a"

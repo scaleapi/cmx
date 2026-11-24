@@ -661,7 +661,10 @@ extern "C" __global__ void size_ref3(const u8 *__restrict__ arc, const u64 *b_of
     u32 blk = blockIdx.x * blockDim.x + threadIdx.x;
     if (blk >= nb) return;
     u64 off = b_off[blk], end = off + b_len[blk];
-    u32 rawlen = ld32u(arc, off), nact = ld32u(arc, off + 8 + rawlen) & 0xFFFF;
+    u32 rawlen = ld32u(arc, off);
+    // the fixed header, the raw area and the context count must lie in the block before nact is loaded
+    if (10ull + rawlen > b_len[blk]) { atomicOr(err, 16u); tsz[blk] = 16; tnt[blk] = 0; return; }
+    u32 nact = ld32u(arc, off + 8 + rawlen) & 0xFFFF;
     u64 r = off + 8 + rawlen + 2, ntot = 0;
     if (nact < 1 || nact > 256) { atomicOr(err, 16u); tsz[blk] = 16; tnt[blk] = 0; return; }
     for (u32 a = 0; a < nact; a++) {
@@ -681,7 +684,8 @@ extern "C" __global__ void parse_ref3(const u8 *__restrict__ arc, const u64 *b_o
     u64 off = b_off[blk], n = b_n[blk], end = off + b_len[blk];
     u32 rawlen = ld32u(arc, off), nw = ld32u(arc, off + 4);
     u64 nsub = SW ? (n + SW - 1) / SW : 1;
-    u32 nact = ld32u(arc, off + 8 + rawlen) & 0xFFFF;
+    // as in size_ref3: nact is loaded only when the header, the raw area and the count lie in the block
+    u32 nact = 10ull + rawlen <= b_len[blk] ? ld32u(arc, off + 8 + rawlen) & 0xFFFF : 0;
     if (tid == 0) {
         int ok = nact >= 1 && nact <= 256 && 8ull + rawlen + 2 * (u64)nw + 2 <= b_len[blk];
         u64 r = off + 8 + rawlen + 2; int prev = -1; u32 bs = 0;
@@ -741,7 +745,7 @@ extern "C" __global__ void parse_ref3(const u8 *__restrict__ arc, const u64 *b_o
         u64 a = s * sw, m = n - a < sw ? n - a : sw;
         u32 wb = s ? ld32u(arc, ip + 8 * (s - 1)) : 0, we = s + 1 < nsub ? ld32u(arc, ip + 8 * s) : nw;
         u32 rb = s ? ld32u(arc, ip + 8 * (s - 1) + 4) : 0;
-        if (wb > we || we > nw || we - wb < 2u * L) atomicOr(err, 4u);
+        if (wb > we || we > nw || we - wb < 2u * L || rb > 8ull * rawlen) atomicOr(err, 4u);
         u64 g = b_sub0[blk] + s;
         d_wb[g] = w0 + 2ull * wb; d_we[g] = w0 + 2ull * we; d_m[g] = (u32)m; d_out[g] = b_out[blk] + a;
         d_raw[g] = (off + 8) * 8 + rb; d_base[g] = b_base[blk] + a;

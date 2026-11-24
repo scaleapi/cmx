@@ -9,19 +9,26 @@ CUDA_ARCH ?= sm_90
 # (-DCMX_UNIFIED), and cmx.c choosing between them.
 all: cmx
 
+# .buildmode records whether the last build had the GPU path (CUDA=1), so switching modes rebuilds cmx
+# instead of keeping a binary built the other way.
+MODE := cuda=$(if $(filter 1,$(CUDA)),1,0) arch=$(CUDA_ARCH)
+.buildmode: FORCE
+	@echo '$(MODE)' | cmp -s - $@ || echo '$(MODE)' > $@
+FORCE:
+
 ifeq ($(CUDA),1)
 # cmx --gpu: bf16ref_gpu.cu (and the kernels in gpu/) built with nvcc; linked by nvcc
 GPU_O = bf16ref_gpu.o
-$(GPU_O): bf16ref_gpu.cu bfr_gpu.h gpu/kernels.cuh
+$(GPU_O): bf16ref_gpu.cu bfr_gpu.h gpu/kernels.cuh .buildmode
 	$(NVCC) -O3 -std=c++17 -arch=$(CUDA_ARCH) -c -o $@ bf16ref_gpu.cu
 
-cmx: cmx.c cmxc.c bf16ref.c bfr8_kern.h bfr_gpu.h $(GPU_O)
+cmx: cmx.c cmxc.c bf16ref.c bfr8_kern.h bfr_gpu.h $(GPU_O) .buildmode
 	$(CC) $(CFLAGS) -DCMX_UNIFIED -DBF16REF_GPU -c cmx.c -o cmx_main.o
 	$(CC) $(CFLAGS) -DCMX_UNIFIED -c cmxc.c -o cmx_cmxc.o
 	$(CC) $(CFLAGS) -DCMX_UNIFIED -DBF16REF_GPU -c bf16ref.c -o cmx_bf16ref.o
 	$(NVCC) -o $@ cmx_main.o cmx_cmxc.o cmx_bf16ref.o $(GPU_O) $(LDLIBS)
 else
-cmx: cmx.c cmxc.c bf16ref.c bfr8_kern.h
+cmx: cmx.c cmxc.c bf16ref.c bfr8_kern.h .buildmode
 	$(CC) $(CFLAGS) -DCMX_UNIFIED -o $@ cmx.c cmxc.c bf16ref.c $(LDLIBS)
 endif
 
@@ -46,6 +53,6 @@ test-gpu-emu: cmx cmx_emu
 	sh tests/gpu.sh ./cmx ./cmx_emu small
 
 clean:
-	rm -f cmx cmx_emu *.o
+	rm -f cmx cmx_emu *.o .buildmode
 
-.PHONY: all test test-gpu test-gpu-emu clean
+.PHONY: all test test-gpu test-gpu-emu clean FORCE

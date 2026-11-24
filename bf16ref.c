@@ -78,6 +78,16 @@ __attribute__((noreturn)) static void die(const char *m) {
     if (g_outpath) unlink(g_outpath);
     _exit(1);
 }
+/* Runs fn(arg) on n threads (1..256). Every worker takes its jobs from a shared counter, so if a thread cannot
+ * be started (a thread or memory limit), the calling thread runs fn(arg) as well and the work still gets done. */
+static void run_workers(int n, void *(*fn)(void *), void *arg) {
+    pthread_t tid[256]; int ok[256], failed = 0;
+    if (n < 1) n = 1;
+    if (n > 256) n = 256;
+    for (int i = 0; i < n; i++) { ok[i] = pthread_create(&tid[i], NULL, fn, arg) == 0; failed |= !ok[i]; }
+    if (failed) fn(arg);
+    for (int i = 0; i < n; i++) if (ok[i]) pthread_join(tid[i], NULL);
+}
 static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + 1e-9 * t.tv_nsec; }
 static void *xmalloc(size_t n) { void *p = malloc(n ? n : 1); if (!p) die("out of memory"); return p; }
 static void *xcalloc(size_t n, size_t s) { void *p = calloc(n ? n : 1, s ? s : 1); if (!p) die("out of memory"); return p; }
@@ -595,15 +605,17 @@ static void dec_ref(TC *c, const uint8_t *restrict in, size_t len, size_t n, con
 #undef K_SUF
 
 /* reads the index: ns - 1 entries of `esz` bytes at ix; word offsets must increase by at least 2 L words */
+/* (in 64 bits, so that no offset near 2^32 can wrap past the checks) */
 static void sub_bounds(const uint8_t *ix, size_t ns, size_t esz, uint32_t nw, int L, uint32_t *wo, uint64_t *rb, uint64_t rbits) {
     wo[0] = 0; if (rb) rb[0] = 0;
     for (size_t s = 1; s < ns; s++) {
         wo[s] = ld32(ix + (s - 1) * esz);
         if (rb) rb[s] = ld32(ix + (s - 1) * esz + 4);
-        if (wo[s] < wo[s - 1] + 2 * (uint32_t)L || (rb && (rb[s] < rb[s - 1] || rb[s] > rbits))) die("corrupt block (index)");
+        if (wo[s] > nw || (uint64_t)wo[s] < (uint64_t)wo[s - 1] + 2 * (uint64_t)L || (rb && (rb[s] < rb[s - 1] || rb[s] > rbits)))
+            die("corrupt block (index)");
     }
     wo[ns] = nw; if (rb) rb[ns] = rbits;
-    if (wo[ns] < wo[ns - 1] + 2 * (uint32_t)L) die("corrupt block (index)");
+    if ((uint64_t)wo[ns] < (uint64_t)wo[ns - 1] + 2 * (uint64_t)L) die("corrupt block (index)");
 }
 
 static void dec_alone8(TC *c, const uint8_t *restrict in, size_t len, size_t n, uint16_t *restrict t) {
@@ -840,9 +852,7 @@ static uint64_t file_hash6(const uint8_t *p, size_t len, int threads) {
     HashJob J = {p, len, (len + ((size_t)1 << 26) - 1) >> 26, 0, NULL, PTHREAD_MUTEX_INITIALIZER};
     J.h = xcalloc(J.nch, 8);
     if ((size_t)threads > J.nch) threads = (int)(J.nch ? J.nch : 1);
-    pthread_t th[256];
-    for (int i = 0; i < threads; i++) pthread_create(&th[i], NULL, hash_worker, &J);
-    for (int i = 0; i < threads; i++) pthread_join(th[i], NULL);
+    run_workers(threads, hash_worker, &J);
     uint64_t r = 0x9E3779B97F4A7C15ull ^ len;
     for (size_t k = 0; k < J.nch; k++) { r = (r ^ J.h[k]) * 0xC4CEB9FE1A85EC53ull; r ^= r >> 29; }
     free(J.h);
@@ -1014,9 +1024,7 @@ static int clamp_threads(int threads, size_t jobs);
 static void write_par(int fd, const uint8_t *const *src, const uint64_t *len, const uint64_t *off, size_t n, int threads) {
     WJob J = {fd, src, len, off, n, 0, PTHREAD_MUTEX_INITIALIZER, PTHREAD_MUTEX_INITIALIZER};
     int th = clamp_threads(threads, n);
-    pthread_t tid[256];
-    for (int i = 0; i < th; i++) pthread_create(&tid[i], NULL, write_worker, &J);
-    for (int i = 0; i < th; i++) pthread_join(tid[i], NULL);
+    run_workers(th, write_worker, &J);
 }
 /* one buffer of n bytes written at off in pieces of 64 MiB */
 static void write_buf_par(int fd, const uint8_t *p, uint64_t n, uint64_t off, int threads) {
@@ -1066,9 +1074,7 @@ static void check_all(const uint8_t *base, const Block *b, size_t n, int threads
     CJob J = {base, b, n, 0, ck, PTHREAD_MUTEX_INITIALIZER};
     if (threads < 1) threads = 1;
     if ((size_t)threads > n) threads = (int)(n ? n : 1);
-    pthread_t tid[256];
-    for (int i = 0; i < threads; i++) pthread_create(&tid[i], NULL, check_worker, &J);
-    for (int i = 0; i < threads; i++) pthread_join(tid[i], NULL);
+    run_workers(threads, check_worker, &J);
 }
 
 static int clamp_threads(int threads, size_t jobs) {
@@ -1305,9 +1311,7 @@ int main(int argc, char **argv) {
         J.window = 2 * (size_t)th; J.pool = xcalloc(J.window + 1, sizeof(uint8_t *));
         J.out = xcalloc(S.n, sizeof(uint8_t *)); J.done = xcalloc(S.n, 1);
         pthread_mutex_init(&J.mu, NULL); pthread_cond_init(&J.cv, NULL);
-        pthread_t tid[256];
-        for (int i = 0; i < th; i++) pthread_create(&tid[i], NULL, enc_worker, &J);
-        for (int i = 0; i < th; i++) pthread_join(tid[i], NULL);
+        run_workers(th, enc_worker, &J);
         for (size_t i = 0; i < J.npool; i++) free(J.pool[i]);
         }
         double t2 = now();
@@ -1416,9 +1420,7 @@ int main(int argc, char **argv) {
         DJob J; memset(&J, 0, sizeof J);
         J.blk = blk; J.nblk = ns; J.maxn = maxn; J.v6 = v6; J.ref = ref; J.fd = fd;
         pthread_mutex_init(&J.mu, NULL); pthread_mutex_init(&J.wmu, NULL);
-        pthread_t tid[256];
-        for (int i = 0; i < th; i++) pthread_create(&tid[i], NULL, dec_worker, &J);
-        for (int i = 0; i < th; i++) pthread_join(tid[i], NULL);
+        run_workers(th, dec_worker, &J);
         if (close(fd)) die("write failed");
         double t2 = now();
         fprintf(stderr, "bf16ref: decoded %llu bytes from %s, %.2f s (setup %.2f, decode+write %.2f)\n",
