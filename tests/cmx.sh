@@ -15,7 +15,8 @@ trap 'rm -rf "$T"' EXIT INT TERM
 pass=0; fail=0
 ok()  { pass=$((pass+1)); echo "ok   $1"; }
 bad() { fail=$((fail+1)); echo "FAIL $1"; }
-check() { if "$@" >/dev/null 2>>"$T/err"; then :; else echo "  command failed: $*" >> "$T/err"; return 1; fi; }
+# check CMD...: run a command whose failure is itself a test failure (so a failed step never skips silently)
+check() { if "$@" >/dev/null 2>>"$T/err"; then :; else bad "command failed: $*"; cat "$T/err"; : > "$T/err"; return 1; fi; }
 same() { cmp -s "$2" "$3" && ok "$1" || { bad "$1"; cat "$T/err"; }; : > "$T/err"; }
 tag() { [ "$(head -c 4 "$2")" = "$3" ] && ok "$1" || bad "$1 (tag $(head -c 4 "$2"), want $3)"; }
 refuse() { name=$1; shift; if "$@" >/dev/null 2>&1; then bad "refuse $name"; else ok "refuse $name"; fi; }
@@ -99,6 +100,54 @@ import sys; T = sys.argv[1]; s = open(f"{T}/base.safetensors", "rb").read()
 open(f"{T}/f32.safetensors", "wb").write(s.replace(b'"dtype":"BF16"', b'"dtype":"F16" '))   # same length, no BF16
 EOF
 check "$CMX" c "$T/f32.safetensors" "$T/n.cmx" && tag "safetensors without BF16 tensors goes to cmxc" "$T/n.cmx" CMXC
+python3 - "$T" <<'EOF'
+import json, struct, sys; T = sys.argv[1]
+def write(path, hdr, body):
+    h = json.dumps(hdr, separators=(",", ":")).encode(); h += b" " * (-len(h) % 8)
+    open(path, "wb").write(struct.pack("<Q", len(h)) + h + body)
+body = b"".join(struct.pack("<f", 0.01 * i) for i in range(256))
+# only F32 tensors, but "dtype": "BF16" in the metadata (and in a tensor name)
+write(f"{T}/meta.safetensors", {"__metadata__": {"dtype": "BF16"}, "x \"dtype\":\"BF16\"": {"dtype": "F32", "shape": [256], "data_offsets": [0, 1024]}}, body)
+EOF
+check "$CMX" c "$T/meta.safetensors" "$T/m.cmx" && tag "\"dtype\": \"BF16\" in metadata or a name goes to cmxc" "$T/m.cmx" CMXC
+
+# ---- the output: never the input or the reference; an existing output survives a failed run
+cp "$T/ft.safetensors" "$T/keep.st"
+refuse "output = input" "$CMX" c "$T/keep.st" "$T/keep.st"
+same "output = input: the input is unchanged" "$T/ft.safetensors" "$T/keep.st"
+ln "$T/keep.st" "$T/keep.link" 2>/dev/null && refuse "output = a hard link to the input" "$CMX" c "$T/keep.st" "$T/keep.link"
+cp "$T/base.safetensors" "$T/base2.st"
+refuse "output = the reference" "$CMX" c "$T/ft.safetensors" "$T/base2.st" --ref "$T/base2.st"
+same "output = the reference: the reference is unchanged" "$T/base.safetensors" "$T/base2.st"
+echo "precious" > "$T/dest"; cp "$T/dest" "$T/dest.orig"
+refuse "decoding with the wrong reference" "$CMX" d "$T/d.cmx" "$T/dest" --ref "$T/ft.safetensors"
+same "wrong reference: the existing output is unchanged" "$T/dest.orig" "$T/dest"
+refuse "decoding a non-archive" "$CMX" d "$T/text" "$T/dest"
+same "non-archive: the existing output is unchanged" "$T/dest.orig" "$T/dest"
+check "$CMX" d "$T/w.cmx" "$T/dest" && same "a good run replaces the existing output" "$T/ft.safetensors" "$T/dest"
+chmod 600 "$T/dest"; check "$CMX" d "$T/w.cmx" "$T/dest"
+[ "$(ls -l "$T/dest" | cut -c1-10)" = "-rw-------" ] && ok "a replaced output keeps its permissions" || bad "a replaced output keeps its permissions"
+check "$CMX" d "$T/w.cmx" /dev/null && ok "an output that is a device is written in place"
+left=$(ls "$T" | grep -c '\.cmx-') ; [ "$left" -eq 0 ] && ok "no temporary files are left behind" || bad "temporary files left: $left"
+
+# ---- a BFR8 index offset near 2^32 is refused at the index (it once wrapped past the check)
+check "$CMX" c "$T/ft.safetensors" "$T/wrap.cmx" -b 1 -s 1 -l 32
+python3 - "$T/wrap.cmx" "$T/wrap_bad.cmx" <<'EOF'
+import struct, sys
+a = bytearray(open(sys.argv[1], "rb").read()); sw, ns = struct.unpack_from("<I", a, 40)[0], struct.unpack_from("<I", a, 32)[0]
+body = 48 + 48 * ns
+for k in range(ns):
+    rec = 48 + 48 * k; off, ln, roff, outlen, ck = struct.unpack_from("<5Q", a, rec + 8)
+    if a[rec] == 1 and (ln // 2 + sw - 1) // sw >= 3:     # an alone block with at least 3 sub-streams
+        ng = (ln // 2 + 7) // 8; nnz = struct.unpack_from("<I", a, body + 4)[0]
+        struct.pack_into("<I", a, body + 12 + 5 * ng + 4 * nnz, 0xFFFFFFC0); break
+    body += outlen
+else: sys.exit("no alone block with 3 sub-streams")
+open(sys.argv[2], "wb").write(a)
+EOF
+if "$CMX" d "$T/wrap_bad.cmx" "$T/x" 2>"$T/wrap.err"; then bad "index offset 0xFFFFFFC0 decoded"
+elif grep -q "corrupt block (index)" "$T/wrap.err"; then ok "index offset 0xFFFFFFC0 is refused at the index"
+else bad "index offset 0xFFFFFFC0 not refused at the index: $(cat "$T/wrap.err")"; fi
 
 # ---- refusals
 refuse "--ref with a cmxc archive" "$CMX" d "$T/t.cmx" "$T/x" --ref "$T/base.safetensors"

@@ -245,6 +245,8 @@ void decode_kind(int kind, const u8 *arc, u64 arclen, const V64 &aoff, const V64
         LAUNCH(parse_alone3, nb, T, 0, arc, offs.p, lens.p, lay.b_n.p, lay.b_out.p, lay.d_sub0.p, SW, t1.p, t2.p, rawmap.p,
                d_wb.p, d_we.p, d_m.p, d_out.p, d_raw.p, err.p);
         stage("  parse alone");
+        /* a rejected block leaves its sub-stream fields unset: stop before the decoder uses them */
+        if (err.get()[0]) throw GpuError("corrupt archive (GPU parse)");
         LAUNCH(dec3_alone, lay.nit, DWARPS * 32, PTOT * 4 + NSA * 4 + 64 + DWARPS * 2 * 1024, arc, arclen, lay.it_blk.p, lay.it_s0.p, lay.it_cnt.p,
                t1.p, t2.p, rawmap.p, d_wb.p, d_we.p, d_m.p, d_out.p, d_raw.p, out16, err.p);
         dsync(); stage("  dec3_alone kernel");
@@ -257,6 +259,7 @@ void decode_kind(int kind, const u8 *arc, u64 arclen, const V64 &aoff, const V64
         LAUNCH(parse_ref3, nb, T, 0, arc, offs.p, lens.p, lay.b_n.p, lay.b_out.p, lay.b_base.p, lay.d_sub0.p, SW, (int)L, tab.p, tofs.p, tsz.p, tnt.p,
                d_wb.p, d_we.p, d_m.p, d_out.p, d_raw.p, d_base.p, err.p);
         stage("  parse given ref");
+        if (err.get()[0]) throw GpuError("corrupt archive (GPU parse)");
         LAUNCH(dec3_ref, lay.nit, DWARPS * 32, SMT + DWARPS * 3 * 1024, arc, arclen, lay.it_blk.p, lay.it_s0.p, lay.it_cnt.p, tab.p, tofs.p, tsz.p, tnt.p,
                SMT, b16, b16bytes, d_wb.p, d_we.p, d_m.p, d_out.p, d_raw.p, d_base.p, out16, err.p);
         dsync(); stage("  dec3_ref kernel");

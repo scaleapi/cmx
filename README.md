@@ -33,7 +33,8 @@ primed archives, and checks that the decoder refuses truncated and malformed arc
 - round trips of text and of a synthetic safetensors pair, alone and given the base;
 - options give the same archive as the settings they stand for, and weights archives do not depend on `-t`;
 - the choice of codec;
-- the BFR8 layouts;
+- the BFR8 layouts, and a damaged index;
+- the output: never the input or the reference, and kept when a run fails;
 - refusals.
 
 Each text-codec run maps about 3.4 GiB of model tables.
@@ -50,6 +51,10 @@ for anything else. Within a safetensors file, bf16ref codes the BF16 tensors; it
 the tensors of other dtypes raw.
 
 **Decompressing.** `cmx d` chooses the decoder from the archive's first four bytes.
+
+**The output.** `cmx` writes to a temporary file next to the output and renames it over the output only when
+the run succeeds, so a failed run (a wrong reference, a damaged archive) leaves an existing output as it was.
+It refuses an output that is the same file as the input or the reference.
 
 | Option | Effect |
 |---|---|
